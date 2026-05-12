@@ -1,0 +1,11 @@
+{
+  "required_sections": [
+    "Model Details",
+    "Intended Use",
+    "Factors",
+    "Metrics",
+    "Evaluation Data",
+    "Training Data",
+    "Ethical Considerations"
+  ]
+}

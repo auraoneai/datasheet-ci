@@ -1,0 +1,10 @@
+name: Datasheet CI
+description: Enforce Datasheet, Model Card, and Data Card completeness.
+inputs:
+  paths:
+    description: Markdown paths to scan
+    required: false
+    default: "**/*.md"
+runs:
+  using: node20
+  main: dist/index.js

@@ -1,0 +1,11 @@
+{
+  "required_sections": [
+    "Motivation",
+    "Composition",
+    "Collection Process",
+    "Preprocessing",
+    "Uses",
+    "Distribution",
+    "Maintenance"
+  ]
+}
