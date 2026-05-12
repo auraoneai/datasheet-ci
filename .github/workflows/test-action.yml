@@ -11,3 +11,15 @@ jobs:
       - run: npm run build
       - run: node dist/index.js examples/valid_datasheet.md
       - run: node dist/index.js examples/invalid_datasheet.md && exit 1 || exit 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -U build twine pytest
+      - run: python -m pip install -e .
+        working-directory: python_validator
+      - run: pytest
+        working-directory: python_validator
+      - run: python -m build
+        working-directory: python_validator
+      - run: twine check dist/*
+        working-directory: python_validator

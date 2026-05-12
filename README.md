@@ -8,6 +8,8 @@ A GitHub Action and standalone Python validator that enforces Datasheet-for-Data
 - uses: auraoneai/datasheet-ci@v0.1.0
 ```
 
+The standalone Python validator can be installed from `python_validator/` and run as `datasheet-ci path/to/datasheet.md`.
+
 ## Marketplace
 
 The action manifest is ready for GitHub Marketplace publication as `auraoneai/datasheet-ci`.
