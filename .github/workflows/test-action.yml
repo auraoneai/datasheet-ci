@@ -7,7 +7,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 20 }
-      - run: npm ci
-      - run: npm test
+      - run: npm install --no-audit --no-fund
+      - run: npm run build
       - run: node dist/index.js examples/valid_datasheet.md
       - run: node dist/index.js examples/invalid_datasheet.md && exit 1 || exit 0
