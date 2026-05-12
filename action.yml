@@ -2,9 +2,17 @@ name: Datasheet CI
 description: Enforce Datasheet, Model Card, and Data Card completeness.
 inputs:
   paths:
-    description: Markdown paths to scan
+    description: Markdown paths or globs to scan. On pull_request events, matching changed Markdown files are scanned when github-token is available.
     required: false
     default: "**/*.md"
+  github-token:
+    description: GitHub token used to read PR changed files and post a summary comment.
+    required: false
+    default: ${{ github.token }}
+  comment-on-pr:
+    description: Post a summary comment on pull requests.
+    required: false
+    default: "true"
 runs:
   using: node20
   main: dist/index.js

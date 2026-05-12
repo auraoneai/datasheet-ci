@@ -16,6 +16,18 @@ const requiredByKind: Record<DocumentKind, string[]> = {
 };
 
 const ignoredDirs = new Set([".git", "node_modules", "dist", "coverage", ".next", ".turbo"]);
+const commentMarker = "<!-- datasheet-ci-summary -->";
+
+type PullRequestContext = {
+  owner: string;
+  repo: string;
+  number: number;
+  apiUrl: string;
+};
+
+type PullRequestFile = {
+  filename: string;
+};
 
 export function validateMarkdown(text: string, kind: DocumentKind = "datasheet"): ValidationResult {
   const required = requiredByKind[kind];
@@ -44,6 +56,26 @@ function globToRegExp(pattern: string): RegExp {
     }
   }
   return new RegExp(`${out}$`);
+}
+
+function matchesAnyPattern(path: string, patternsInput: string): boolean {
+  const normalized = normalizePath(path);
+  const patterns = patternsInput
+    .split(/[\n,]/)
+    .map((item) => normalizePath(item.trim()))
+    .filter(Boolean);
+  for (const pattern of patterns.length ? patterns : ["**/*.md"]) {
+    if (pattern.includes("*")) {
+      if (globToRegExp(pattern).test(normalized)) {
+        return true;
+      }
+      continue;
+    }
+    if (normalized === pattern || normalized.startsWith(`${pattern}/`)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function listMarkdownFiles(root: string): string[] {
@@ -140,7 +172,143 @@ function emitGitHubAnnotations(results: FileValidationResult[]): void {
   }
 }
 
-function runCli(args: string[]): number {
+function getInput(name: string): string | undefined {
+  const envName = `INPUT_${name.toUpperCase().replaceAll("-", "_")}`;
+  return process.env[envName];
+}
+
+function getPullRequestContext(): PullRequestContext | null {
+  const eventPath = process.env.GITHUB_EVENT_PATH;
+  if (!eventPath || !existsSync(eventPath)) {
+    return null;
+  }
+  const event = JSON.parse(readFileSync(eventPath, "utf8")) as {
+    pull_request?: { number?: number };
+    repository?: { full_name?: string };
+  };
+  const number = event.pull_request?.number;
+  const [owner, repo] = event.repository?.full_name?.split("/") ?? [];
+  if (!number || !owner || !repo) {
+    return null;
+  }
+  return {
+    owner,
+    repo,
+    number,
+    apiUrl: process.env.GITHUB_API_URL ?? "https://api.github.com",
+  };
+}
+
+async function githubRequest<T>(context: PullRequestContext, token: string, path: string, init: RequestInit = {}): Promise<T> {
+  const response = await fetch(`${context.apiUrl}${path}`, {
+    ...init,
+    headers: {
+      accept: "application/vnd.github+json",
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+      "x-github-api-version": "2022-11-28",
+      ...init.headers,
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`GitHub API ${init.method ?? "GET"} ${path} failed: ${response.status} ${await response.text()}`);
+  }
+  return (await response.json()) as T;
+}
+
+async function getChangedMarkdownFiles(context: PullRequestContext, token: string, patternsInput: string): Promise<string[]> {
+  const files: PullRequestFile[] = [];
+  let page = 1;
+  while (true) {
+    const batch = await githubRequest<PullRequestFile[]>(
+      context,
+      token,
+      `/repos/${context.owner}/${context.repo}/pulls/${context.number}/files?per_page=100&page=${page}`,
+    );
+    files.push(...batch);
+    if (batch.length < 100) {
+      break;
+    }
+    page += 1;
+  }
+  return files
+    .map((file) => file.filename)
+    .filter((path) => path.toLowerCase().endsWith(".md"))
+    .filter((path) => matchesAnyPattern(path, patternsInput))
+    .filter((path) => existsSync(path))
+    .map((path) => resolve(path))
+    .sort();
+}
+
+export function buildPrComment(result: { ok: boolean; files: FileValidationResult[]; skipped: string[] }): string {
+  const lines = [
+    commentMarker,
+    "## Datasheet CI",
+    "",
+    result.ok ? "All checked documentation files include the required sections." : "Some checked documentation files are missing required sections.",
+    "",
+    `Checked files: ${result.files.length}`,
+  ];
+  const failures = result.files.filter((file) => !file.ok);
+  const warnings = result.files.reduce((count, file) => count + file.piiWarnings.length, 0);
+  lines.push(`Blocking failures: ${failures.length}`);
+  lines.push(`PII-like warnings: ${warnings}`);
+  if (failures.length > 0) {
+    lines.push("", "### Missing Sections");
+    for (const failure of failures) {
+      lines.push(`- \`${relative(process.cwd(), failure.path)}\`: ${failure.missing.join(", ")}`);
+    }
+  }
+  if (warnings > 0) {
+    lines.push("", "### Warnings");
+    for (const file of result.files) {
+      for (const warning of file.piiWarnings) {
+        lines.push(`- \`${relative(process.cwd(), file.path)}\`: PII-like ${warning.pattern} pattern \`${warning.match}\``);
+      }
+    }
+  }
+  if (result.skipped.length > 0) {
+    lines.push("", `Skipped unrecognized Markdown files: ${result.skipped.length}`);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+async function postPullRequestComment(context: PullRequestContext, token: string, body: string): Promise<void> {
+  const comments = await githubRequest<Array<{ id: number; body?: string }>>(
+    context,
+    token,
+    `/repos/${context.owner}/${context.repo}/issues/${context.number}/comments?per_page=100`,
+  );
+  const previous = comments.find((comment) => comment.body?.includes(commentMarker));
+  if (previous) {
+    await githubRequest(
+      context,
+      token,
+      `/repos/${context.owner}/${context.repo}/issues/comments/${previous.id}`,
+      { method: "PATCH", body: JSON.stringify({ body }) },
+    );
+    return;
+  }
+  await githubRequest(
+    context,
+    token,
+    `/repos/${context.owner}/${context.repo}/issues/${context.number}/comments`,
+    { method: "POST", body: JSON.stringify({ body }) },
+  );
+}
+
+async function resolveActionPaths(patternsInput: string, token: string | undefined): Promise<string[]> {
+  const context = getPullRequestContext();
+  if (context && token) {
+    const changed = await getChangedMarkdownFiles(context, token, patternsInput);
+    if (changed.length > 0) {
+      return changed;
+    }
+  }
+  return expandPatterns(patternsInput);
+}
+
+async function runCli(args: string[]): Promise<number> {
   if (args.length > 0) {
     const paths = args.flatMap((arg) => expandPatterns(arg));
     const result = validateFiles(paths, false);
@@ -149,13 +317,23 @@ function runCli(args: string[]): number {
   }
 
   const actionPaths = process.env.INPUT_PATHS ?? "**/*.md";
-  const paths = expandPatterns(actionPaths);
+  const token = getInput("github-token") || process.env.GITHUB_TOKEN;
+  const paths = await resolveActionPaths(actionPaths, token);
   const result = validateFiles(paths, true);
   emitGitHubAnnotations(result.files);
+  const context = getPullRequestContext();
+  if (context && token && getInput("comment-on-pr") !== "false") {
+    await postPullRequestComment(context, token, buildPrComment(result));
+  }
   console.log(JSON.stringify(result, null, 2));
   return result.ok && result.files.length > 0 ? 0 : 1;
 }
 
 if (process.argv[1]?.endsWith("index.js")) {
-  process.exit(runCli(process.argv.slice(2)));
+  runCli(process.argv.slice(2))
+    .then((code) => process.exit(code))
+    .catch((error: unknown) => {
+      console.error(error instanceof Error ? error.message : error);
+      process.exit(1);
+    });
 }

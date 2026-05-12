@@ -10,6 +10,7 @@ const requiredByKind = {
     data_card: dataCard,
 };
 const ignoredDirs = new Set([".git", "node_modules", "dist", "coverage", ".next", ".turbo"]);
+const commentMarker = "<!-- datasheet-ci-summary -->";
 export function validateMarkdown(text, kind = "datasheet") {
     const required = requiredByKind[kind];
     const missing = required.filter((section) => !new RegExp(`^#{1,3}\\s+${section}\\b`, "mi").test(text));
@@ -38,6 +39,25 @@ function globToRegExp(pattern) {
         }
     }
     return new RegExp(`${out}$`);
+}
+function matchesAnyPattern(path, patternsInput) {
+    const normalized = normalizePath(path);
+    const patterns = patternsInput
+        .split(/[\n,]/)
+        .map((item) => normalizePath(item.trim()))
+        .filter(Boolean);
+    for (const pattern of patterns.length ? patterns : ["**/*.md"]) {
+        if (pattern.includes("*")) {
+            if (globToRegExp(pattern).test(normalized)) {
+                return true;
+            }
+            continue;
+        }
+        if (normalized === pattern || normalized.startsWith(`${pattern}/`)) {
+            return true;
+        }
+    }
+    return false;
 }
 function listMarkdownFiles(root) {
     const files = [];
@@ -128,7 +148,115 @@ function emitGitHubAnnotations(results) {
         }
     }
 }
-function runCli(args) {
+function getInput(name) {
+    const envName = `INPUT_${name.toUpperCase().replaceAll("-", "_")}`;
+    return process.env[envName];
+}
+function getPullRequestContext() {
+    const eventPath = process.env.GITHUB_EVENT_PATH;
+    if (!eventPath || !existsSync(eventPath)) {
+        return null;
+    }
+    const event = JSON.parse(readFileSync(eventPath, "utf8"));
+    const number = event.pull_request?.number;
+    const [owner, repo] = event.repository?.full_name?.split("/") ?? [];
+    if (!number || !owner || !repo) {
+        return null;
+    }
+    return {
+        owner,
+        repo,
+        number,
+        apiUrl: process.env.GITHUB_API_URL ?? "https://api.github.com",
+    };
+}
+async function githubRequest(context, token, path, init = {}) {
+    const response = await fetch(`${context.apiUrl}${path}`, {
+        ...init,
+        headers: {
+            accept: "application/vnd.github+json",
+            authorization: `Bearer ${token}`,
+            "content-type": "application/json",
+            "x-github-api-version": "2022-11-28",
+            ...init.headers,
+        },
+    });
+    if (!response.ok) {
+        throw new Error(`GitHub API ${init.method ?? "GET"} ${path} failed: ${response.status} ${await response.text()}`);
+    }
+    return (await response.json());
+}
+async function getChangedMarkdownFiles(context, token, patternsInput) {
+    const files = [];
+    let page = 1;
+    while (true) {
+        const batch = await githubRequest(context, token, `/repos/${context.owner}/${context.repo}/pulls/${context.number}/files?per_page=100&page=${page}`);
+        files.push(...batch);
+        if (batch.length < 100) {
+            break;
+        }
+        page += 1;
+    }
+    return files
+        .map((file) => file.filename)
+        .filter((path) => path.toLowerCase().endsWith(".md"))
+        .filter((path) => matchesAnyPattern(path, patternsInput))
+        .filter((path) => existsSync(path))
+        .map((path) => resolve(path))
+        .sort();
+}
+export function buildPrComment(result) {
+    const lines = [
+        commentMarker,
+        "## Datasheet CI",
+        "",
+        result.ok ? "All checked documentation files include the required sections." : "Some checked documentation files are missing required sections.",
+        "",
+        `Checked files: ${result.files.length}`,
+    ];
+    const failures = result.files.filter((file) => !file.ok);
+    const warnings = result.files.reduce((count, file) => count + file.piiWarnings.length, 0);
+    lines.push(`Blocking failures: ${failures.length}`);
+    lines.push(`PII-like warnings: ${warnings}`);
+    if (failures.length > 0) {
+        lines.push("", "### Missing Sections");
+        for (const failure of failures) {
+            lines.push(`- \`${relative(process.cwd(), failure.path)}\`: ${failure.missing.join(", ")}`);
+        }
+    }
+    if (warnings > 0) {
+        lines.push("", "### Warnings");
+        for (const file of result.files) {
+            for (const warning of file.piiWarnings) {
+                lines.push(`- \`${relative(process.cwd(), file.path)}\`: PII-like ${warning.pattern} pattern \`${warning.match}\``);
+            }
+        }
+    }
+    if (result.skipped.length > 0) {
+        lines.push("", `Skipped unrecognized Markdown files: ${result.skipped.length}`);
+    }
+    return `${lines.join("\n")}\n`;
+}
+async function postPullRequestComment(context, token, body) {
+    const comments = await githubRequest(context, token, `/repos/${context.owner}/${context.repo}/issues/${context.number}/comments?per_page=100`);
+    const previous = comments.find((comment) => comment.body?.includes(commentMarker));
+    if (previous) {
+        await githubRequest(context, token, `/repos/${context.owner}/${context.repo}/issues/comments/${previous.id}`, { method: "PATCH", body: JSON.stringify({ body }) });
+        return;
+    }
+    await githubRequest(context, token, `/repos/${context.owner}/${context.repo}/issues/${context.number}/comments`, { method: "POST", body: JSON.stringify({ body }) });
+}
+async function resolveActionPaths(patternsInput, token) {
+    const context = getPullRequestContext();
+    if (context && token) {
+        const changed = await getChangedMarkdownFiles(context, token, patternsInput);
+        if (changed.length > 0) {
+            return changed;
+        }
+    }
+    return expandPatterns(patternsInput);
+}
+async function runCli(args) {
     if (args.length > 0) {
         const paths = args.flatMap((arg) => expandPatterns(arg));
         const result = validateFiles(paths, false);
@@ -136,12 +264,22 @@ function runCli(args) {
         return result.ok && result.files.length > 0 ? 0 : 1;
     }
     const actionPaths = process.env.INPUT_PATHS ?? "**/*.md";
-    const paths = expandPatterns(actionPaths);
+    const token = getInput("github-token") || process.env.GITHUB_TOKEN;
+    const paths = await resolveActionPaths(actionPaths, token);
     const result = validateFiles(paths, true);
     emitGitHubAnnotations(result.files);
+    const context = getPullRequestContext();
+    if (context && token && getInput("comment-on-pr") !== "false") {
+        await postPullRequestComment(context, token, buildPrComment(result));
+    }
     console.log(JSON.stringify(result, null, 2));
     return result.ok && result.files.length > 0 ? 0 : 1;
 }
 if (process.argv[1]?.endsWith("index.js")) {
-    process.exit(runCli(process.argv.slice(2)));
+    runCli(process.argv.slice(2))
+        .then((code) => process.exit(code))
+        .catch((error) => {
+        console.error(error instanceof Error ? error.message : error);
+        process.exit(1);
+    });
 }

@@ -20,6 +20,8 @@ jobs:
       - run: node dist/index.js && exit 1 || exit 0
         env:
           INPUT_PATHS: examples/invalid_datasheet.md
+      - run: |
+          node --input-type=module -e 'import { buildPrComment } from "./dist/index.js"; const body = buildPrComment({ok:false, files:[{path:process.cwd()+"/examples/invalid_datasheet.md", ok:false, kind:"datasheet", missing:["Composition"], piiWarnings:[{pattern:"email", match:"test@example.com"}]}], skipped:[]}); if (!body.includes("<!-- datasheet-ci-summary -->") || !body.includes("Missing Sections") || !body.includes("PII-like email")) process.exit(1);'
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}

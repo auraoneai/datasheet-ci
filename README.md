@@ -13,6 +13,7 @@ A GitHub Action and standalone Python validator that enforces Datasheet-for-Data
 ```
 
 The action accepts exact Markdown files, directories, or simple `*.md` / `**/*.md` glob patterns. It emits GitHub annotations for missing required sections and warns on PII-like patterns without treating them as blocking errors.
+On `pull_request` events, the action uses `github-token` to scan only changed Markdown files that match `paths` and updates a single PR summary comment marked with `<!-- datasheet-ci-summary -->`.
 
 The standalone Python validator can be installed from `python_validator/` and run as `datasheet-ci path/to/datasheet.md`.
 

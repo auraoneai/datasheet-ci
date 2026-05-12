@@ -6,10 +6,11 @@
 
 - The section schema lives in `schemas/` so teams can review required documentation fields without reading action code.
 - The action scans changed Markdown files and reports missing sections as failures because incomplete datasheets should block merges.
+- On pull requests, the action reads changed files from the GitHub API when `github-token` is available, filters them through the configured `paths` patterns, emits annotations, and updates one persistent summary comment instead of creating a new comment on every run.
 - PII pattern findings are warnings, not hard failures, because high-recall regexes can flag synthetic examples and contact placeholders.
 - The Python validator mirrors the action rules so projects can run the same policy before opening a pull request.
 - Examples are synthetic and intentionally small to keep self-tests fast and deterministic.
 
 ## Verification Surface
 
-The CI workflow builds the TypeScript action, runs unit coverage for the PII and section checks, runs the Python validator tests, builds the Python package, and performs `twine check` on the generated artifacts.
+The CI workflow builds the TypeScript action, runs the CLI and action-input pass/fail smokes, verifies PR comment formatting, runs the Python validator tests, builds the Python package, and performs `twine check` on the generated artifacts.
