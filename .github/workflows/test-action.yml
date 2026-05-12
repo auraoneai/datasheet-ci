@@ -14,6 +14,12 @@ jobs:
       - run: npm run build
       - run: node dist/index.js examples/valid_datasheet.md
       - run: node dist/index.js examples/invalid_datasheet.md && exit 1 || exit 0
+      - run: node dist/index.js
+        env:
+          INPUT_PATHS: examples/valid_datasheet.md
+      - run: node dist/index.js && exit 1 || exit 0
+        env:
+          INPUT_PATHS: examples/invalid_datasheet.md
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}

@@ -5,8 +5,14 @@ A GitHub Action and standalone Python validator that enforces Datasheet-for-Data
 ## Quickstart
 
 ```yaml
-- uses: auraoneai/datasheet-ci@v0.1.0
+- uses: auraoneai/datasheet-ci@v0.1.1
+  with:
+    paths: |
+      docs/datasheet.md
+      docs/model-card.md
 ```
+
+The action accepts exact Markdown files, directories, or simple `*.md` / `**/*.md` glob patterns. It emits GitHub annotations for missing required sections and warns on PII-like patterns without treating them as blocking errors.
 
 The standalone Python validator can be installed from `python_validator/` and run as `datasheet-ci path/to/datasheet.md`.
 
