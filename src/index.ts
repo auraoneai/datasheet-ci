@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { relative, resolve } from "node:path";
 import { requiredSections as datasheet } from "./validators/datasheet.js";
 import { requiredSections as modelCard } from "./validators/model_card.js";
@@ -8,6 +8,13 @@ import { scanPii } from "./pii_check.js";
 export type DocumentKind = "datasheet" | "model_card" | "data_card";
 export type ValidationResult = { ok: boolean; kind: DocumentKind; missing: string[]; piiWarnings: ReturnType<typeof scanPii> };
 export type FileValidationResult = ValidationResult & { path: string };
+export type DecisionState = "pass" | "review" | "fail" | "blocked";
+export type ValidationSummary = {
+  ok: boolean;
+  state: DecisionState;
+  files: FileValidationResult[];
+  skipped: string[];
+};
 
 const requiredByKind: Record<DocumentKind, string[]> = {
   datasheet,
@@ -146,7 +153,7 @@ function inferKind(path: string, text: string): DocumentKind | null {
   return scores[0]?.score > 0 ? scores[0].kind : null;
 }
 
-function validateFiles(paths: string[], requireRecognizedKind: boolean): { ok: boolean; files: FileValidationResult[]; skipped: string[] } {
+function validateFiles(paths: string[], requireRecognizedKind: boolean): ValidationSummary {
   const files: FileValidationResult[] = [];
   const skipped: string[] = [];
   for (const path of paths) {
@@ -158,16 +165,30 @@ function validateFiles(paths: string[], requireRecognizedKind: boolean): { ok: b
     }
     files.push({ path, ...validateMarkdown(text, kind) });
   }
-  return { ok: files.every((file) => file.ok), files, skipped };
+  const failures = files.filter((file) => !file.ok).length;
+  const warnings = files.reduce((count, file) => count + file.piiWarnings.length, 0);
+  const state: DecisionState = files.length === 0 ? "blocked" : failures > 0 ? "fail" : warnings > 0 ? "review" : "pass";
+  return { ok: state === "pass" || state === "review", state, files, skipped };
 }
 
 function emitGitHubAnnotations(results: FileValidationResult[]): void {
   for (const result of results) {
     for (const finding of result.piiWarnings) {
-      console.log(`::warning file=${result.path}::PII-like ${finding.pattern} pattern found: ${finding.match}`);
+      emitAnnotation(
+        "warning",
+        `PII-like ${finding.pattern} pattern`,
+        `Review this match and remove or document it if it is not approved: ${finding.match}`,
+        result.path,
+        finding.line,
+      );
     }
     if (!result.ok) {
-      console.log(`::error file=${result.path}::Missing required ${result.kind} sections: ${result.missing.join(", ")}`);
+      emitAnnotation(
+        "error",
+        `Incomplete ${displayKind(result.kind)}`,
+        `Add the required sections: ${result.missing.join(", ")}`,
+        result.path,
+      );
     }
   }
 }
@@ -240,46 +261,60 @@ async function getChangedMarkdownFiles(context: PullRequestContext, token: strin
     .sort();
 }
 
-export function buildPrComment(result: { ok: boolean; files: FileValidationResult[]; skipped: string[] }): string {
-  const lines = [
-    commentMarker,
-    "## Datasheet CI",
-    "",
-    result.ok ? "All checked documentation files include the required sections." : "Some checked documentation files are missing required sections.",
-    "",
-    `Checked files: ${result.files.length}`,
-  ];
+export function buildPrComment(result: ValidationSummary, version = "0.2.1"): string {
   const failures = result.files.filter((file) => !file.ok);
   const warnings = result.files.reduce((count, file) => count + file.piiWarnings.length, 0);
-  lines.push(`Blocking failures: ${failures.length}`);
-  lines.push(`PII-like warnings: ${warnings}`);
+  const lines = [
+    commentMarker,
+    "## AuraOne Datasheet CI",
+    "",
+    `**Decision:** ${decisionLabel(result.state)}`,
+    "",
+    "| Evidence | Result |",
+    "| --- | ---: |",
+    `| Checked files | ${result.files.length} |`,
+    `| Blocking failures | ${failures.length} |`,
+    `| PII-like warnings | ${warnings} |`,
+    `| Skipped files | ${result.skipped.length} |`,
+  ];
   if (failures.length > 0) {
     lines.push("", "### Missing Sections");
     for (const failure of failures) {
-      lines.push(`- \`${relative(process.cwd(), failure.path)}\`: ${failure.missing.join(", ")}`);
+      lines.push(
+        `- \`${escapeInlineCode(relative(process.cwd(), failure.path))}\`: ${failure.missing.map(escapeMarkdown).join(", ")}`,
+      );
     }
   }
   if (warnings > 0) {
     lines.push("", "### Warnings");
     for (const file of result.files) {
       for (const warning of file.piiWarnings) {
-        lines.push(`- \`${relative(process.cwd(), file.path)}\`: PII-like ${warning.pattern} pattern \`${warning.match}\``);
+        lines.push(
+          `- \`${escapeInlineCode(relative(process.cwd(), file.path))}:${warning.line}\`: PII-like ${escapeMarkdown(warning.pattern)} pattern \`${escapeInlineCode(warning.match)}\``,
+        );
       }
     }
   }
   if (result.skipped.length > 0) {
-    lines.push("", `Skipped unrecognized Markdown files: ${result.skipped.length}`);
+    lines.push("", "### Skipped Files");
+    for (const path of result.skipped) lines.push(`- \`${escapeInlineCode(relative(process.cwd(), path))}\``);
   }
+  lines.push("", "### Next action", "", nextAction(result.state));
+  lines.push("", `Generated by AuraOne Datasheet CI ${escapeMarkdown(version)}. Validation runs locally in this workflow.`);
   return `${lines.join("\n")}\n`;
 }
 
 async function postPullRequestComment(context: PullRequestContext, token: string, body: string): Promise<void> {
-  const comments = await githubRequest<Array<{ id: number; body?: string }>>(
+  const comments = await githubRequest<Array<{ id: number; body?: string; user?: { type?: string; login?: string } }>>(
     context,
     token,
     `/repos/${context.owner}/${context.repo}/issues/${context.number}/comments?per_page=100`,
   );
-  const previous = comments.find((comment) => comment.body?.includes(commentMarker));
+  const previous = comments.find(
+    (comment) =>
+      (comment.user?.type === "Bot" || comment.user?.login === "github-actions[bot]") &&
+      comment.body?.includes(commentMarker),
+  );
   if (previous) {
     await githubRequest(
       context,
@@ -313,7 +348,7 @@ async function runCli(args: string[]): Promise<number> {
     const paths = args.flatMap((arg) => expandPatterns(arg));
     const result = validateFiles(paths, false);
     console.log(JSON.stringify(result.files.length === 1 ? result.files[0] : result, null, 2));
-    return result.ok && result.files.length > 0 ? 0 : 1;
+    return result.ok ? 0 : 1;
   }
 
   const actionPaths = process.env.INPUT_PATHS ?? "**/*.md";
@@ -321,12 +356,81 @@ async function runCli(args: string[]): Promise<number> {
   const paths = await resolveActionPaths(actionPaths, token);
   const result = validateFiles(paths, true);
   emitGitHubAnnotations(result.files);
+  const summary = buildPrComment(result);
+  writeJobSummary(summary);
+  writeOutput("decision", result.state);
+  writeOutput("checked-files", String(result.files.length));
+  writeOutput("blocking-failures", String(result.files.filter((file) => !file.ok).length));
+  writeOutput("warnings", String(result.files.reduce((count, file) => count + file.piiWarnings.length, 0)));
   const context = getPullRequestContext();
   if (context && token && getInput("comment-on-pr") !== "false") {
-    await postPullRequestComment(context, token, buildPrComment(result));
+    await postPullRequestComment(context, token, summary);
   }
   console.log(JSON.stringify(result, null, 2));
-  return result.ok && result.files.length > 0 ? 0 : 1;
+  if (result.state === "blocked") {
+    emitAnnotation("error", "Datasheet CI blocked", "No recognized documentation files matched the configured paths.");
+  }
+  return result.ok ? 0 : 1;
+}
+
+function writeJobSummary(markdown: string): void {
+  if (process.env.GITHUB_STEP_SUMMARY) {
+    appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${markdown.replace(commentMarker, "").trim()}\n`, "utf8");
+  }
+}
+
+function writeOutput(name: string, value: string): void {
+  if (!process.env.GITHUB_OUTPUT) return;
+  const delimiter = `AURAONE_${name.toUpperCase()}_${process.pid}`;
+  appendFileSync(process.env.GITHUB_OUTPUT, `${name}<<${delimiter}\n${value}\n${delimiter}\n`, "utf8");
+}
+
+function emitAnnotation(
+  level: "notice" | "warning" | "error",
+  title: string,
+  message: string,
+  file?: string,
+  line?: number,
+): void {
+  const properties = [`title=${escapeWorkflowProperty(title)}`];
+  if (file) properties.push(`file=${escapeWorkflowProperty(relative(process.cwd(), file))}`);
+  if (line) properties.push(`line=${line}`);
+  console.log(`::${level} ${properties.join(",")}::${escapeWorkflowData(message)}`);
+}
+
+function decisionLabel(state: DecisionState): string {
+  return { pass: "Passed", review: "Review recommended", fail: "Failed", blocked: "Blocked" }[state];
+}
+
+function nextAction(state: DecisionState): string {
+  return {
+    pass: "No blocking action is required. Keep the documentation aligned with future dataset or model changes.",
+    review: "Review each PII-like match and remove it or document why the content is approved before merging.",
+    fail: "Add the listed required sections, then rerun the workflow.",
+    blocked: "Correct the configured paths or add a recognized Datasheet, Model Card, or Data Card, then rerun the workflow.",
+  }[state];
+}
+
+function displayKind(kind: DocumentKind): string {
+  return { datasheet: "Datasheet", model_card: "Model Card", data_card: "Data Card" }[kind];
+}
+
+export function escapeMarkdown(value: string): string {
+  return value
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")
+    .replace(/([\\`*_[\]{}()#+\-.!|>])/g, "\\$1");
+}
+
+function escapeInlineCode(value: string): string {
+  return value.replace(/`/g, "\\`").replace(/[\r\n]/g, " ");
+}
+
+function escapeWorkflowData(value: string): string {
+  return value.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
+}
+
+function escapeWorkflowProperty(value: string): string {
+  return escapeWorkflowData(value).replace(/:/g, "%3A").replace(/,/g, "%2C");
 }
 
 if (process.argv[1]?.endsWith("index.js")) {

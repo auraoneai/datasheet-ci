@@ -4,13 +4,33 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "datasheet-ci"
-version = "0.1.1"
-description = "Standalone Python validator for Datasheet CI."
+version = "0.2.1"
+description = "Validate required Datasheet, Model Card, and Data Card headings with warning-only PII pattern checks."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 authors = [{ name = "AuraOne" }]
+keywords = ["datasheet", "model-card", "data-card", "dataset-documentation", "ai-governance", "pii-detection"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Documentation",
+  "Topic :: Software Development :: Quality Assurance",
+]
 dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/auraoneai/datasheet-ci"
+Documentation = "https://github.com/auraoneai/datasheet-ci/tree/main/python_validator"
+Repository = "https://github.com/auraoneai/datasheet-ci.git"
+Issues = "https://github.com/auraoneai/datasheet-ci/issues"
+Changelog = "https://github.com/auraoneai/datasheet-ci/blob/main/CHANGELOG.md"
 
 [project.scripts]
 datasheet-ci = "datasheet_ci:main"

@@ -1,18 +1,28 @@
-name: Datasheet CI
-description: Enforce Datasheet, Model Card, and Data Card completeness.
+name: AuraOne Datasheet CI
+description: Check required Datasheet, Model Card, and Data Card sections and flag PII-like text for human review.
+author: AuraOne
 inputs:
   paths:
-    description: Markdown paths or globs to scan. On pull_request events, matching changed Markdown files are scanned when github-token is available.
+    description: Exact Markdown paths, directories, or simple globs to scan; pull requests prefer matching changed files when a token is available.
     required: false
     default: "**/*.md"
   github-token:
-    description: GitHub token used to read PR changed files and post a summary comment.
+    description: GitHub token used to list changed pull request files and update the bot-owned summary comment.
     required: false
     default: ${{ github.token }}
   comment-on-pr:
-    description: Post a summary comment on pull requests.
+    description: Create or update one bot-owned evidence comment on pull_request events.
     required: false
     default: "true"
+outputs:
+  decision:
+    description: "Normalized validation decision: pass, review, fail, or blocked."
+  checked-files:
+    description: "Number of recognized documentation files checked."
+  blocking-failures:
+    description: "Number of files missing required sections."
+  warnings:
+    description: "Number of PII-like regex matches requiring human review."
 runs:
   using: node20
   main: dist/index.js
