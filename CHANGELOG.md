@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.1
+## 0.2.1 - 2026-07-13
 
 - Publish the current Action and standalone Python validator from synchronized
   source with an npm lockfile and reproducible release preflight.
