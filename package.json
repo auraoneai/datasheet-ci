@@ -2,14 +2,16 @@
   "name": "@auraone/datasheet-ci",
   "version": "0.2.1",
   "private": false,
-  "description": "GitHub Action for required-section validation of Datasheets, Model Cards, and Data Cards with PII review warnings.",
+  "description": "LLM evaluation dataset documentation GitHub Action: required-section validation of Datasheets, Model Cards, and Data Cards with PII review warnings.",
   "repository": {
     "type": "git",
     "url": "https://github.com/auraoneai/datasheet-ci.git"
   },
-  "homepage": "https://github.com/auraoneai/datasheet-ci#readme",
-  "bugs": "https://github.com/auraoneai/datasheet-ci/issues",
-  "keywords": ["github-action", "github-actions", "datasheet", "model-card", "data-card", "dataset-documentation", "ai-governance", "pii-detection"],
+  "homepage": "https://auraone.ai/open/evalkit",
+  "bugs": {
+    "url": "https://github.com/auraoneai/datasheet-ci/issues"
+  },
+  "keywords": ["llm-evaluation", "github-action", "github-actions", "datasheet", "model-card", "data-card", "dataset-documentation", "ai-governance", "pii-detection"],
   "license": "MIT",
   "type": "module",
   "scripts": {
