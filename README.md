@@ -1,5 +1,16 @@
 # AuraOne Datasheet CI
 
+**LLM evaluation dataset documentation checks**: Datasheet, Model Card, and Data Card completeness in CI.
+
+> Part of [AuraOne EvalKit](https://auraone.ai/open/evalkit). Run it in CI next to EvalKit to check that the datasheets and model cards behind an evaluation have their required sections.
+
+## Quick Start
+
+```bash
+python -m pip install "datasheet-ci==0.2.1"
+datasheet-ci examples/valid_datasheet.md
+```
+
 Check Datasheet-for-Datasets, Model Card, and Data Card completeness in pull requests or local Python workflows.
 
 Datasheet CI is for data governance teams, model-release owners, and repository maintainers who want documentation requirements to be inspectable and enforceable. Missing required headings block the check; high-recall email, SSN, IP, and phone patterns produce review warnings rather than automatic PII conclusions.
